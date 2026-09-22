@@ -109,8 +109,8 @@ const ls = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
 };
-// Spacing, case and punctuation never matter: "Neat Dock Upon", "neat-dock-upon"
-// and "neatdockupon" are the same code.
+// Spacing, case and punctuation never matter, so the same code can be written
+// as words, hyphenated or run together. No real code appears in this file.
 const CODE = location.hash.replace(/^#/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
 let GIST = "";
 let key = null;
