@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Paste Inbox</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #fff; --line: #e3e3de; --fg: #1b1b19;
+    --muted: #71716b; --accent: #b4522a; --code-bg: #f2f2ef;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17171a; --panel: #1f1f23; --line: #32323a; --fg: #ececea;
+      --muted: #91918c; --accent: #e08a5e; --code-bg: #151518;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 72px; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .count { color: var(--muted); font-size: 13px; }
+  button {
+    font: inherit; font-size: 13px; cursor: pointer; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg);
+    padding: 7px 13px; transition: border-color .12s;
+  }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+
+  #gate { max-width: 300px; margin: 14vh auto 0; text-align: center; }
+  #gate p { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  #pin {
+    font: inherit; width: 100%; padding: 11px 13px; text-align: center;
+    letter-spacing: .3em; border-radius: var(--radius);
+    border: 1px solid var(--line); background: var(--panel); color: var(--fg);
+  }
+  #pin:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  #gate button { width: 100%; margin-top: 10px; padding: 11px; }
+  .remember {
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    margin-top: 14px; color: var(--muted); font-size: 12.5px;
+  }
+  .err { color: var(--accent); font-size: 13px; min-height: 19px; margin-top: 12px; }
+
+  .entry {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); margin-bottom: 12px; overflow: hidden;
+  }
+  .head {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    border-bottom: 1px solid var(--line); flex-wrap: wrap;
+  }
+  .title { font-weight: 550; font-size: 13.5px; min-width: 0; overflow-wrap: anywhere; }
+  .meta { color: var(--muted); font-size: 12px; margin-right: auto; white-space: nowrap; }
+  pre {
+    margin: 0; padding: 13px; overflow-x: auto; background: var(--code-bg);
+    font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    max-height: 60vh; white-space: pre; tab-size: 2;
+  }
+  .empty { color: var(--muted); text-align: center; padding: 48px 0; font-size: 14px; }
+  footer { margin-top: 24px; display: flex; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="gate">
+    <h1>Paste Inbox</h1>
+    <p>Enter your PIN to decrypt.</p>
+    <input id="pin" type="password" inputmode="numeric" autocomplete="off"
+           placeholder="••••••" aria-label="PIN">
+    <button class="primary" id="unlock">Unlock</button>
+    <label class="remember"><input type="checkbox" id="remember"> remember on this device</label>
+    <div class="err" id="err"></div>
+  </div>
+
+  <div id="app" hidden>
+    <header>
+      <h1>Paste Inbox</h1>
+      <span class="count" id="count"></span>
+    </header>
+    <div id="list"></div>
+    <footer>
+      <button id="refresh">Refresh</button>
+      <button id="lock">Lock</button>
+    </footer>
+  </div>
+
+</div>
+<script>
+const GIST = "81e1498aea0682833d043d5d89e78bec";
+const $ = (id) => document.getElementById(id);
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+let key = null;
+
+async function deriveKey(pin, saltB64, kdf) {
+  const base = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt: unb64(saltB64), iterations: kdf.iter, hash: kdf.hash },
+    base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+}
+
+async function fetchInbox() {
+  const r = await fetch(`https://api.github.com/gists/${GIST}`, {
+    cache: "no-store", headers: { Accept: "application/vnd.github+json" },
+  });
+  if (!r.ok) throw new Error(r.status === 403
+    ? "GitHub rate limit reached — try again shortly."
+    : `Could not reach the inbox (HTTP ${r.status}).`);
+  const f = (await r.json()).files["inbox.json"];
+  if (!f) throw new Error("Inbox not found.");
+  return JSON.parse(f.truncated ? await (await fetch(f.raw_url)).text() : f.content);
+}
+
+const ago = (iso) => {
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+};
+
+function render(items) {
+  $("count").textContent = items.length ? `${items.length} item${items.length > 1 ? "s" : ""}` : "";
+  const list = $("list");
+  list.textContent = "";
+  if (!items.length) {
+    list.innerHTML = '<div class="empty">Nothing here yet.</div>';
+    return;
+  }
+  for (const it of items) {
+    const el = document.createElement("div");
+    el.className = "entry";
+
+    const head = document.createElement("div");
+    head.className = "head";
+    if (it.title) {
+      const t = document.createElement("span");
+      t.className = "title";
+      t.textContent = it.title;
+      head.append(t);
+    }
+    const m = document.createElement("span");
+    m.className = "meta";
+    m.textContent = [it.lang, ago(it.ts)].filter(Boolean).join(" · ");
+    head.append(m);
+
+    const copy = document.createElement("button");
+    copy.textContent = "Copy";
+    copy.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(it.body);
+        copy.textContent = "Copied";
+      } catch {
+        copy.textContent = "Select all ↓";
+        getSelection().selectAllChildren(pre);
+      }
+      setTimeout(() => (copy.textContent = "Copy"), 1400);
+    };
+    head.append(copy);
+
+    const dl = document.createElement("button");
+    dl.textContent = "Save";
+    dl.onclick = () => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([it.body], { type: "text/plain" }));
+      a.download = it.title || "paste.txt";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    };
+    head.append(dl);
+
+    const pre = document.createElement("pre");
+    pre.textContent = it.body;
+
+    el.append(head, pre);
+    list.append(el);
+  }
+}
+
+async function load() {
+  const inbox = await fetchInbox();
+  const out = [];
+  for (const e of inbox.entries) {
+    const buf = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: unb64(e.iv) }, key, unb64(e.ct));
+    out.push(JSON.parse(new TextDecoder().decode(buf)));
+  }
+  render(out);
+}
+
+async function unlock(pin, remember) {
+  $("err").textContent = "";
+  $("unlock").disabled = true;
+  try {
+    const inbox = await fetchInbox();
+    key = await deriveKey(pin, inbox.salt, inbox.kdf);
+    if (inbox.entries.length) {
+      // verifies the PIN: a wrong key fails GCM authentication
+      await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: unb64(inbox.entries[0].iv) }, key, unb64(inbox.entries[0].ct));
+    }
+    (remember ? localStorage : sessionStorage).setItem("paste-pin", pin);
+    $("gate").hidden = true;
+    $("app").hidden = false;
+    await load();
+  } catch (e) {
+    key = null;
+    $("err").textContent = e instanceof DOMException ? "Wrong PIN." : e.message;
+  } finally {
+    $("unlock").disabled = false;
+  }
+}
+
+$("unlock").onclick = () => unlock($("pin").value.trim(), $("remember").checked);
+$("pin").onkeydown = (e) => { if (e.key === "Enter") $("unlock").click(); };
+$("refresh").onclick = () => load().catch((e) => alert(e.message));
+$("lock").onclick = () => {
+  try { localStorage.removeItem("paste-pin"); sessionStorage.removeItem("paste-pin"); } catch {}
+  location.reload();
+};
+
+let saved = null;
+try { saved = localStorage.getItem("paste-pin") || sessionStorage.getItem("paste-pin"); } catch {}
+if (saved) unlock(saved, !!localStorage.getItem("paste-pin"));
+else $("pin").focus();
+</script>
+</body>
+</html>
