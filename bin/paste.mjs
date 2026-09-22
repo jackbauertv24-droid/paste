@@ -14,6 +14,11 @@ const PIN_FILE = `${CONF_DIR}/pin`;
 // multiplies an offline attacker's cost by 8x over the original 250k.
 const KDF = { iter: 2000000, hash: 'SHA-256' };
 const KEEP = 30;
+// The directory maps a memorable code to the gist address. It is resolved once
+// per device and then cached, so it can afford far more work than the inbox.
+const DIR_KDF = { iter: 8000000, hash: 'SHA-256' };
+// Codes are compared in normalised form, so spacing and case never matter.
+const normCode = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
 const MAX_BYTES = 512 * 1024;
 
 const b64 = (buf) => Buffer.from(buf).toString('base64');
@@ -47,6 +52,14 @@ async function deriveKey(pinStr, saltB64) {
   return crypto.subtle.deriveKey(
     { name: 'PBKDF2', salt: unb64(saltB64), iterations: KDF.iter, hash: KDF.hash },
     base, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+}
+
+async function deriveFor(secret, saltB64, kdf, usages) {
+  const base = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: unb64(saltB64), iterations: kdf.iter, hash: kdf.hash },
+    base, { name: 'AES-GCM', length: 256 }, false, usages);
 }
 
 async function seal(key, obj) {
@@ -127,6 +140,24 @@ async function cmdPush(argv) {
   console.log(`posted -> ${c.url || 'viewer'}  (${inbox.entries.length} in inbox)`);
 }
 
+async function cmdSetCode(words, repoDir) {
+  const c = conf();
+  const code = normCode(words);
+  if (code.length < 8) die('code too short - use at least three words');
+  const salt = b64(crypto.getRandomValues(new Uint8Array(16)));
+  const key = await deriveFor(code, salt, DIR_KDF, ['encrypt']);
+  const blob = await seal(key, { gist: c.gist });
+  const dir = { v: 1, kdf: DIR_KDF, salt, entries: [blob] };
+  const out = `${repoDir}/dir.json`;
+  writeFileSync(out, JSON.stringify(dir) + '\n');
+  c.code = code;
+  // Hyphenated only for legibility when printed; the viewer normalises anyway.
+  c.codeDisplay = String(words).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  c.repo = repoDir;
+  saveConf(c);
+  console.log(`wrote ${out} - commit and push it, then use: paste --where`);
+}
+
 function cmdClear() {
   const c = conf();
   writeGist(c.gist, { v: 1, kdf: KDF, salt: c.salt, entries: [] });
@@ -149,6 +180,7 @@ const USAGE = `usage:
   paste --clear                            empty the inbox
   paste --set-pin PIN                      set the unlock PIN
   paste --rotate-pin PIN                   new PIN + wipe inbox
+  paste --set-code "word word word"        set the memorable URL code
   paste --init                             create the gist (once)
   paste --where                            print viewer URL and gist id`;
 
@@ -157,12 +189,14 @@ try {
   if (cmd === '--init') await cmdInit();
   else if (cmd === '--set-pin') { setPin(rest[0]); console.log('PIN set'); }
   else if (cmd === '--rotate-pin') await cmdRotate(rest[0]);
+  else if (cmd === '--set-code') await cmdSetCode(rest.join(' '), conf().repo || '/config/claude-workspace/paste');
   else if (cmd === '--clear') cmdClear();
   else if (cmd === '--where') {
     const c = conf();
     // The fragment carries the gist id; it is never sent to the server and is
     // not in the public repo, so the full link is the thing worth bookmarking.
-    console.log(c.url ? `${c.url}#${c.gist}` : `(no url set) gist ${c.gist}`);
+    if (!c.url) console.log(`(no url set) gist ${c.gist}`);
+    else console.log(`${c.url}#${c.codeDisplay || c.code || c.gist}`);
   }
   else if (cmd === '-h' || cmd === '--help') console.log(USAGE);
   else await cmdPush(process.argv.slice(2));

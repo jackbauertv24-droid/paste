@@ -32,8 +32,8 @@ button per entry. You do not need to supply a link — it is always the same
 page. Just say that it is posted, and what you titled it.
 
 **Do not print the output of `paste --where`** unless asked. That URL's
-fragment contains the gist id, which is the other half of the secret and is
-kept out of this repository on purpose.
+fragment contains the memorable code that resolves to the inbox address, which
+is the other half of the secret and is kept out of this repository on purpose.
 
 Use `-t` every time. It is the only thing distinguishing entries in the inbox.
 

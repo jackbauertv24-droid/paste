@@ -98,29 +98,51 @@
 
 </div>
 <script>
-// The gist id is deliberately NOT stored in this repository, which is public.
-// It arrives in the URL fragment - browsers never transmit a fragment to the
-// server - and is then remembered on this device. The bookmark is therefore a
-// capability in its own right: knowing the page URL alone is not enough.
-const GIST = (() => {
-  const h = location.hash.replace(/^#/, "").trim();
-  if (/^[0-9a-f]{32}$/.test(h)) {
-    try { localStorage.setItem("paste-gist", h); } catch {}
-    history.replaceState(null, "", location.pathname);
-    return h;
-  }
-  try { return localStorage.getItem("paste-gist") || ""; } catch { return ""; }
-})();
+// The gist address is deliberately NOT stored in this repository, which is
+// public. The URL fragment carries a memorable code instead - browsers never
+// transmit a fragment to the server - and that code opens dir.json, a small
+// encrypted directory whose plaintext is the address. Publishing the directory
+// is safe because without the code it is just ciphertext.
 const $ = (id) => document.getElementById(id);
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+const ls = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+// Spacing, case and punctuation never matter: "Neat Dock Upon", "neat-dock-upon"
+// and "neatdockupon" are the same code.
+const CODE = location.hash.replace(/^#/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+let GIST = "";
 let key = null;
 
-async function deriveKey(pin, saltB64, kdf) {
+async function deriveKey(secret, saltB64, kdf) {
   const base = await crypto.subtle.importKey(
-    "raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"]);
+    "raw", new TextEncoder().encode(secret), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
     { name: "PBKDF2", salt: unb64(saltB64), iterations: kdf.iter, hash: kdf.hash },
     base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+}
+
+async function resolveGist(status) {
+  if (/^[0-9a-f]{32}$/.test(CODE)) return CODE;          // a raw address still works
+  const cached = CODE ? ls.get("gist:" + CODE) : ls.get("gist:last");
+  if (cached) return cached;
+  if (!CODE) throw new Error("NOLINK");
+  status("Opening directory…");
+  const dir = await fetch("dir.json?_=" + Date.now(), { cache: "no-store" })
+    .then((r) => { if (!r.ok) throw new Error("Directory unavailable."); return r.json(); });
+  const dkey = await deriveKey(CODE, dir.salt, dir.kdf);
+  for (const e of dir.entries) {
+    try {
+      const buf = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: unb64(e.iv) }, dkey, unb64(e.ct));
+      const { gist } = JSON.parse(new TextDecoder().decode(buf));
+      ls.set("gist:" + CODE, gist);
+      ls.set("gist:last", gist);
+      return gist;
+    } catch { /* not this entry */ }
+  }
+  throw new Error("That code does not match any inbox.");
 }
 
 async function fetchInbox() {
@@ -217,8 +239,13 @@ async function load() {
 async function unlock(pin, remember) {
   $("err").textContent = "";
   $("unlock").disabled = true;
-  $("unlock").textContent = "Deriving key…";
+  const status = (t) => { $("unlock").textContent = t; };
   try {
+    status("Opening directory…");
+    GIST = await resolveGist(status);
+    // Drop the code from the address bar now that this device has remembered it.
+    if (location.hash) history.replaceState(null, "", location.pathname);
+    status("Deriving key…");
     const inbox = await fetchInbox();
     key = await deriveKey(pin, inbox.salt, inbox.kdf);
     if (inbox.entries.length) {
@@ -232,7 +259,11 @@ async function unlock(pin, remember) {
     await load();
   } catch (e) {
     key = null;
-    $("err").textContent = e instanceof DOMException ? "Wrong passphrase." : e.message;
+    $("err").textContent = e instanceof DOMException
+      ? "Wrong passphrase."
+      : e.message === "NOLINK"
+        ? "This device does not know which inbox to open — open the full link, including the part after the #."
+        : e.message;
   } finally {
     $("unlock").disabled = false;
     $("unlock").textContent = "Unlock";
@@ -246,13 +277,6 @@ $("lock").onclick = () => {
   try { localStorage.removeItem("paste-pin"); sessionStorage.removeItem("paste-pin"); } catch {}
   location.reload();
 };
-
-if (!GIST) {
-  $("gate").innerHTML = "<h1>Paste Inbox</h1><p>This device does not know which"
-    + " inbox to open. Run <code>paste --where</code> and open the full link it"
-    + " prints, including the part after the #.</p>";
-  throw new Error("no gist id");
-}
 
 let saved = null;
 try { saved = localStorage.getItem("paste-pin") || sessionStorage.getItem("paste-pin"); } catch {}

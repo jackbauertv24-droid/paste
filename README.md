@@ -24,6 +24,7 @@ paste -f build.log               # a file
 paste -t notes.md -l md "..."    # title and language label
 paste --clear                    # empty the inbox
 paste --rotate-pin 1234          # new PIN, wipes the inbox
+paste --set-code "word word word" # change the memorable URL code
 paste --where                    # print the viewer URL
 ```
 
@@ -36,9 +37,11 @@ out of it:
 
 - **The PIN**, which lives in `~/.paste/pin` at mode 0600 and never crosses the
   network — key derivation happens locally, before anything is uploaded.
-- **The gist id**, which reaches the viewer through the URL fragment. Browsers
-  never send a fragment to the server, so it stays out of logs, and it is not
-  compiled into the published page.
+- **The gist address**, which is never written here at all. The URL fragment
+  carries a short memorable code instead, and that code decrypts `dir.json`, a
+  published directory whose plaintext is the address. Browsers never send a
+  fragment to the server, so the code stays out of logs. Publishing an
+  encrypted directory is safe: without the code it is only ciphertext.
 
 The gist itself is *secret* rather than public: still readable anonymously by
 the viewer, but not listed on the owner's profile and not discoverable without
