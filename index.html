@@ -67,6 +67,10 @@
     max-height: 60vh; white-space: pre; tab-size: 2;
   }
   .empty { color: var(--muted); text-align: center; padding: 48px 0; font-size: 14px; }
+  .warn {
+    border: 1px solid var(--accent); border-radius: var(--radius);
+    padding: 10px 12px; margin-bottom: 12px; font-size: 13px; color: var(--accent);
+  }
   footer { margin-top: 24px; display: flex; gap: 8px; }
 </style>
 </head>
@@ -172,11 +176,19 @@ const ago = (iso) => {
   return `${Math.floor(s / 86400)}d ago`;
 };
 
-function render(items) {
+function render(items, bad) {
   $("count").textContent = items.length ? `${items.length} item${items.length > 1 ? "s" : ""}` : "";
   const list = $("list");
   list.textContent = "";
-  if (!items.length) {
+  if (bad) {
+    const w = document.createElement("div");
+    w.className = "warn";
+    w.textContent = bad + (bad > 1 ? " entries were" : " entry was")
+      + " written with a different key and cannot be read. Clear the inbox"
+      + " if you did not expect this.";
+    list.append(w);
+  }
+  if (!items.length && !bad) {
     list.innerHTML = '<div class="empty">Nothing here yet.</div>';
     return;
   }
@@ -233,12 +245,18 @@ function render(items) {
 async function load() {
   const inbox = await fetchInbox();
   const out = [];
+  let bad = 0;
   for (const e of inbox.entries) {
-    const buf = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: unb64(e.iv) }, key, unb64(e.ct));
-    out.push(JSON.parse(new TextDecoder().decode(buf)));
+    // Anyone holding the GitHub token can append entries without knowing the
+    // code. Skip what this key cannot authenticate rather than failing the
+    // whole view, so one foreign entry cannot hide every genuine one.
+    try {
+      const buf = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: unb64(e.iv) }, key, unb64(e.ct));
+      out.push(JSON.parse(new TextDecoder().decode(buf)));
+    } catch { bad++; }
   }
-  render(out);
+  render(out, bad);
 }
 
 async function unlock(pin, remember) {
@@ -260,10 +278,18 @@ async function unlock(pin, remember) {
       inbox = await fetchInbox();
     }
     key = await deriveKey(pin, inbox.salt, inbox.kdf);
-    if (inbox.entries.length) {
-      // verifies the PIN: a wrong key fails GCM authentication
-      await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: unb64(inbox.entries[0].iv) }, key, unb64(inbox.entries[0].ct));
+    let opened = false;
+    for (const e of inbox.entries) {
+      try {
+        await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(e.iv) }, key, unb64(e.ct));
+        opened = true;
+        break;
+      } catch { /* possibly a foreign entry; keep looking */ }
+    }
+    if (inbox.entries.length && !opened) {
+      // Either the code is wrong or every entry is foreign. Re-deriving the
+      // directory distinguishes the two: it only succeeds with the right code.
+      await resolveGist(pin, status, true);
     }
     // A code that came from the bookmark is kept for this tab only, so a
     // reload does not lock you out, without persisting it uninvited.

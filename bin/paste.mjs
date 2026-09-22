@@ -142,6 +142,19 @@ async function cmdPush(argv) {
   inbox.entries = inbox.entries.slice(0, KEEP);
   writeGist(c.gist, inbox);
   console.log(`posted -> ${c.url || 'viewer'}  (${inbox.entries.length} in inbox)`);
+
+  // The gist is writable by anything holding the GitHub token, with or without
+  // the code. Entries this key cannot open did not come from here.
+  const vkey = await deriveFor(pin(), inbox.salt, inbox.kdf || KDF, ['decrypt']);
+  let foreign = 0;
+  for (const e of inbox.entries) {
+    try {
+      await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(e.iv) }, vkey, unb64(e.ct));
+    } catch { foreign++; }
+  }
+  if (foreign) console.error(foreign > 1
+    ? `paste: warning - ${foreign} entries in the inbox were written with a different key`
+    : 'paste: warning - 1 entry in the inbox was written with a different key');
 }
 
 // The code is the only secret. It encrypts the directory that names the inbox
