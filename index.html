@@ -97,7 +97,19 @@
 
 </div>
 <script>
-const GIST = "81e1498aea0682833d043d5d89e78bec";
+// The gist id is deliberately NOT stored in this repository, which is public.
+// It arrives in the URL fragment - browsers never transmit a fragment to the
+// server - and is then remembered on this device. The bookmark is therefore a
+// capability in its own right: knowing the page URL alone is not enough.
+const GIST = (() => {
+  const h = location.hash.replace(/^#/, "").trim();
+  if (/^[0-9a-f]{32}$/.test(h)) {
+    try { localStorage.setItem("paste-gist", h); } catch {}
+    history.replaceState(null, "", location.pathname);
+    return h;
+  }
+  try { return localStorage.getItem("paste-gist") || ""; } catch { return ""; }
+})();
 const $ = (id) => document.getElementById(id);
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 let key = null;
@@ -231,6 +243,13 @@ $("lock").onclick = () => {
   try { localStorage.removeItem("paste-pin"); sessionStorage.removeItem("paste-pin"); } catch {}
   location.reload();
 };
+
+if (!GIST) {
+  $("gate").innerHTML = "<h1>Paste Inbox</h1><p>This device does not know which"
+    + " inbox to open. Run <code>paste --where</code> and open the full link it"
+    + " prints, including the part after the #.</p>";
+  throw new Error("no gist id");
+}
 
 let saved = null;
 try { saved = localStorage.getItem("paste-pin") || sessionStorage.getItem("paste-pin"); } catch {}

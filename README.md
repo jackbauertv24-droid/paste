@@ -31,9 +31,20 @@ Then open the viewer, type the PIN once, and tap **Copy** on any entry.
 
 ## What is public
 
-The gist is public, so the world can see that ciphertext exists and roughly how
-large it is. It cannot see the contents. The inbox keeps the 30 most recent
-entries.
+This repository is public; it holds code only. Two things are deliberately kept
+out of it:
+
+- **The PIN**, which lives in `~/.paste/pin` at mode 0600 and never crosses the
+  network — key derivation happens locally, before anything is uploaded.
+- **The gist id**, which reaches the viewer through the URL fragment. Browsers
+  never send a fragment to the server, so it stays out of logs, and it is not
+  compiled into the published page.
+
+The gist itself is *secret* rather than public: still readable anonymously by
+the viewer, but not listed on the owner's profile and not discoverable without
+the id. Reaching the contents therefore requires both the bookmark and the PIN.
+
+The inbox keeps the 30 most recent entries.
 
 ## Layout
 

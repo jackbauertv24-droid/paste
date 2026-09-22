@@ -31,6 +31,10 @@ The destination is one fixed bookmarked page, unlocked with a PIN, with a Copy
 button per entry. You do not need to supply a link — it is always the same
 page. Just say that it is posted, and what you titled it.
 
+**Do not print the output of `paste --where`** unless asked. That URL's
+fragment contains the gist id, which is the other half of the secret and is
+kept out of this repository on purpose.
+
 Use `-t` every time. It is the only thing distinguishing entries in the inbox.
 
 ## Rules
@@ -65,5 +69,6 @@ paste --init            # creates the gist, prints its id
 paste --set-pin <pin>   # ask for one; do not invent it and do not echo it
 ```
 
-`--init` creates a **new** gist, so the viewer's baked-in gist id in
-`index.html` must be updated to match before the page will find it.
+`--init` creates a **new** secret gist. The id is not compiled into the page;
+the viewer reads it from the URL fragment and remembers it per device, so the
+bookmark from `paste --where` is what makes the page work.

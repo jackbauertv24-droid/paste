@@ -77,8 +77,10 @@ function stdin() {
 
 async function cmdInit() {
   const body = JSON.stringify({
-    description: 'paste inbox (encrypted)',
-    public: true,
+    // Secret, not private: still readable anonymously by the viewer page, but
+    // not listed on the owner's profile and not reachable without the id.
+    description: 'notes',
+    public: false,
     files: { 'inbox.json': { content: '{}' } },
   });
   const g = JSON.parse(gh(['api', '--method', 'POST', '/gists', '--input', '-'], body));
@@ -86,6 +88,7 @@ async function cmdInit() {
   saveConf({ gist: g.id, salt, kdf: KDF });
   writeGist(g.id, { v: 1, kdf: KDF, salt, entries: [] });
   console.log(`gist  ${g.id}`);
+  console.log('bookmark the URL printed by: paste --where');
 }
 
 async function cmdPush(argv) {
@@ -152,7 +155,12 @@ try {
   else if (cmd === '--set-pin') { setPin(rest[0]); console.log('PIN set'); }
   else if (cmd === '--rotate-pin') await cmdRotate(rest[0]);
   else if (cmd === '--clear') cmdClear();
-  else if (cmd === '--where') { const c = conf(); console.log(c.url || '(no url set)'); console.log(`gist ${c.gist}`); }
+  else if (cmd === '--where') {
+    const c = conf();
+    // The fragment carries the gist id; it is never sent to the server and is
+    // not in the public repo, so the full link is the thing worth bookmarking.
+    console.log(c.url ? `${c.url}#${c.gist}` : `(no url set) gist ${c.gist}`);
+  }
   else if (cmd === '-h' || cmd === '--help') console.log(USAGE);
   else await cmdPush(process.argv.slice(2));
 } catch (e) {
