@@ -75,10 +75,10 @@
 
   <div id="gate">
     <h1>Paste Inbox</h1>
-    <p>Enter your passphrase to decrypt.</p>
+    <p>Enter your code.</p>
     <input id="pin" type="password" autocomplete="current-password"
            autocapitalize="off" autocorrect="off" spellcheck="false"
-           placeholder="passphrase" aria-label="Passphrase">
+           placeholder="word word word word" aria-label="Code">
     <button class="primary" id="unlock">Unlock</button>
     <label class="remember"><input type="checkbox" id="remember"> remember on this device</label>
     <div class="err" id="err"></div>
@@ -111,7 +111,10 @@ const ls = {
 };
 // Spacing, case and punctuation never matter, so the same code can be written
 // as words, hyphenated or run together. No real code appears in this file.
-const CODE = location.hash.replace(/^#/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const norm = (x) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+// The one secret may arrive in the fragment - never sent to the server - so the
+// bookmark opens the inbox in a single tap, or it can simply be typed instead.
+const FRAG = norm(location.hash.replace(/^#/, ""));
 let GIST = "";
 let key = null;
 
@@ -123,21 +126,23 @@ async function deriveKey(secret, saltB64, kdf) {
     base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
 }
 
-async function resolveGist(status) {
-  if (/^[0-9a-f]{32}$/.test(CODE)) return CODE;          // a raw address still works
-  const cached = CODE ? ls.get("gist:" + CODE) : ls.get("gist:last");
-  if (cached) return cached;
-  if (!CODE) throw new Error("NOLINK");
+// The address is cached under a fixed key, never under one derived from the
+// secret, so the secret is not left lying in localStorage key names.
+async function resolveGist(code, status, force) {
+  if (/^[0-9a-f]{32}$/.test(code)) return code;          // a raw address still works
+  if (!force) {
+    const cached = ls.get("gist:last");
+    if (cached) return cached;
+  }
   status("Opening directory…");
   const dir = await fetch("dir.json?_=" + Date.now(), { cache: "no-store" })
     .then((r) => { if (!r.ok) throw new Error("Directory unavailable."); return r.json(); });
-  const dkey = await deriveKey(CODE, dir.salt, dir.kdf);
+  const dkey = await deriveKey(code, dir.salt, dir.kdf);
   for (const e of dir.entries) {
     try {
       const buf = await crypto.subtle.decrypt(
         { name: "AES-GCM", iv: unb64(e.iv) }, dkey, unb64(e.ct));
       const { gist } = JSON.parse(new TextDecoder().decode(buf));
-      ls.set("gist:" + CODE, gist);
       ls.set("gist:last", gist);
       return gist;
     } catch { /* not this entry */ }
@@ -242,45 +247,62 @@ async function unlock(pin, remember) {
   const status = (t) => { $("unlock").textContent = t; };
   try {
     status("Opening directory…");
-    GIST = await resolveGist(status);
-    // Drop the code from the address bar now that this device has remembered it.
+    GIST = await resolveGist(pin, status, false);
+    // Drop the code from the address bar so it does not linger on screen.
     if (location.hash) history.replaceState(null, "", location.pathname);
     status("Deriving key…");
-    const inbox = await fetchInbox();
+    let inbox;
+    try {
+      inbox = await fetchInbox();
+    } catch (err) {
+      // A cached address can outlive the inbox it named; resolve again once.
+      GIST = await resolveGist(pin, status, true);
+      inbox = await fetchInbox();
+    }
     key = await deriveKey(pin, inbox.salt, inbox.kdf);
     if (inbox.entries.length) {
       // verifies the PIN: a wrong key fails GCM authentication
       await crypto.subtle.decrypt(
         { name: "AES-GCM", iv: unb64(inbox.entries[0].iv) }, key, unb64(inbox.entries[0].ct));
     }
-    (remember ? localStorage : sessionStorage).setItem("paste-pin", pin);
+    // A code that came from the bookmark is kept for this tab only, so a
+    // reload does not lock you out, without persisting it uninvited.
+    try {
+      (remember ? localStorage : sessionStorage).setItem("paste-pin", pin);
+    } catch {}
     $("gate").hidden = true;
     $("app").hidden = false;
     await load();
   } catch (e) {
     key = null;
     $("err").textContent = e instanceof DOMException
-      ? "Wrong passphrase."
-      : e.message === "NOLINK"
-        ? "This device does not know which inbox to open — open the full link, including the part after the #."
-        : e.message;
+      ? "Wrong code."
+      : e.message;
   } finally {
     $("unlock").disabled = false;
     $("unlock").textContent = "Unlock";
   }
 }
 
-$("unlock").onclick = () => unlock($("pin").value.trim(), $("remember").checked);
+$("unlock").onclick = () => {
+  const v = norm($("pin").value);
+  if (!v) { $("err").textContent = "Enter your code."; return; }
+  unlock(v, $("remember").checked);
+};
 $("pin").onkeydown = (e) => { if (e.key === "Enter") $("unlock").click(); };
 $("refresh").onclick = () => load().catch((e) => alert(e.message));
 $("lock").onclick = () => {
-  try { localStorage.removeItem("paste-pin"); sessionStorage.removeItem("paste-pin"); } catch {}
-  location.reload();
+  try {
+    localStorage.removeItem("paste-pin");
+    sessionStorage.removeItem("paste-pin");
+  } catch {}
+  location.replace(location.pathname);
 };
 
 let saved = null;
 try { saved = localStorage.getItem("paste-pin") || sessionStorage.getItem("paste-pin"); } catch {}
-if (saved) unlock(saved, !!localStorage.getItem("paste-pin"));
+const boot = FRAG || saved;
+if (boot) unlock(boot, !!ls.get("paste-pin"));
 else $("pin").focus();
 </script>
 </body>

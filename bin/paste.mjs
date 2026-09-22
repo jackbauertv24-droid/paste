@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// paste - encrypt text locally and push it to a fixed gist that the
-// viewer page at <pages-url> decrypts with a PIN.
+// paste - encrypt text locally and push it to a fixed gist that the viewer
+// page decrypts. One secret, the code, both locates and unlocks the inbox.
 import { webcrypto as crypto } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -10,9 +10,10 @@ import { homedir } from 'node:os';
 const CONF_DIR = process.env.PASTE_HOME || `${homedir()}/.paste`;
 const CONF = `${CONF_DIR}/config.json`;
 const PIN_FILE = `${CONF_DIR}/pin`;
-// 2M iterations costs ~1s on a phone (once per device, then remembered) and
-// multiplies an offline attacker's cost by 8x over the original 250k.
-const KDF = { iter: 2000000, hash: 'SHA-256' };
+// One secret guards both the directory and the inbox, so an attacker will
+// always attack whichever is cheaper per guess. Keeping the inbox cost high
+// means the weaker link is not much weaker: 4M is ~2s on a phone.
+const KDF = { iter: 4000000, hash: 'SHA-256' };
 const KEEP = 30;
 // The directory maps a memorable code to the gist address. It is resolved once
 // per device and then cached, so it can afford far more work than the inbox.
@@ -35,12 +36,15 @@ function saveConf(c) {
   writeFileSync(CONF, JSON.stringify(c, null, 2) + '\n');
   chmodSync(CONF, 0o600);
 }
-function pin() {
-  if (!existsSync(PIN_FILE)) die(`no PIN set - run: paste --set-pin <pin>`);
+// The readable form is what gets stored, so --where can print it; every
+// cryptographic use normalises first. This keeps the secret in one file only.
+function codeRaw() {
+  if (!existsSync(PIN_FILE)) die(`no code set - run: paste --set-code "word word word word"`);
   return readFileSync(PIN_FILE, 'utf8').trim();
 }
+const pin = () => normCode(codeRaw());
 function setPin(p) {
-  if (!p || p.length < 4) die('PIN must be at least 4 characters');
+  if (!p || normCode(p).length < 12) die('code must be at least four words');
   mkdirSync(CONF_DIR, { recursive: true });
   writeFileSync(PIN_FILE, p + '\n');
   chmodSync(PIN_FILE, 0o600);
@@ -140,22 +144,28 @@ async function cmdPush(argv) {
   console.log(`posted -> ${c.url || 'viewer'}  (${inbox.entries.length} in inbox)`);
 }
 
+// The code is the only secret. It encrypts the directory that names the inbox
+// and it encrypts the inbox contents, so setting it rewrites both.
 async function cmdSetCode(words, repoDir) {
   const c = conf();
   const code = normCode(words);
-  if (code.length < 8) die('code too short - use at least three words');
-  const salt = b64(crypto.getRandomValues(new Uint8Array(16)));
-  const key = await deriveFor(code, salt, DIR_KDF, ['encrypt']);
-  const blob = await seal(key, { gist: c.gist });
-  const dir = { v: 1, kdf: DIR_KDF, salt, entries: [blob] };
+  setPin(String(words).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+
+  const dirSalt = b64(crypto.getRandomValues(new Uint8Array(16)));
+  const dirKey = await deriveFor(code, dirSalt, DIR_KDF, ['encrypt']);
+  const blob = await seal(dirKey, { gist: c.gist });
   const out = `${repoDir}/dir.json`;
-  writeFileSync(out, JSON.stringify(dir) + '\n');
-  c.code = code;
-  // Hyphenated only for legibility when printed; the viewer normalises anyway.
-  c.codeDisplay = String(words).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  writeFileSync(out, JSON.stringify({ v: 1, kdf: DIR_KDF, salt: dirSalt, entries: [blob] }) + '\n');
+
+  c.salt = b64(crypto.getRandomValues(new Uint8Array(16)));
+  c.kdf = KDF;
+  delete c.code;          // the secret belongs in the code file, not here
+  delete c.codeDisplay;
+  delete c.old;
   c.repo = repoDir;
   saveConf(c);
-  console.log(`wrote ${out} - commit and push it, then use: paste --where`);
+  writeGist(c.gist, { v: 1, kdf: KDF, salt: c.salt, entries: [] });
+  console.log(`code set; inbox cleared. commit and push ${out}`);
 }
 
 function cmdClear() {
@@ -164,31 +174,19 @@ function cmdClear() {
   console.log('inbox cleared');
 }
 
-async function cmdRotate(newPin) {
-  const c = conf();
-  setPin(newPin);
-  c.salt = b64(crypto.getRandomValues(new Uint8Array(16)));
-  c.kdf = KDF;   // otherwise config keeps the superseded iteration count
-  saveConf(c);
-  writeGist(c.gist, { v: 1, kdf: KDF, salt: c.salt, entries: [] });
-  console.log('PIN rotated; inbox cleared (old entries are undecryptable)');
-}
-
 const USAGE = `usage:
   paste [-t TITLE] [-l LANG] [TEXT...]     post text (or pipe via stdin)
   paste -f FILE [-t TITLE]                 post a file
   paste --clear                            empty the inbox
-  paste --set-pin PIN                      set the unlock PIN
-  paste --rotate-pin PIN                   new PIN + wipe inbox
-  paste --set-code "word word word"        set the memorable URL code
+  paste --set-code "four word code here"   set the one secret (wipes inbox)
   paste --init                             create the gist (once)
   paste --where                            print viewer URL and gist id`;
 
 const [cmd, ...rest] = process.argv.slice(2);
 try {
   if (cmd === '--init') await cmdInit();
-  else if (cmd === '--set-pin') { setPin(rest[0]); console.log('PIN set'); }
-  else if (cmd === '--rotate-pin') await cmdRotate(rest[0]);
+  else if (cmd === '--set-pin' || cmd === '--rotate-pin')
+    die('superseded by a single secret - use: paste --set-code "word word word word"');
   else if (cmd === '--set-code') await cmdSetCode(rest.join(' '), conf().repo || '/config/claude-workspace/paste');
   else if (cmd === '--clear') cmdClear();
   else if (cmd === '--where') {
@@ -196,7 +194,7 @@ try {
     // The fragment carries the gist id; it is never sent to the server and is
     // not in the public repo, so the full link is the thing worth bookmarking.
     if (!c.url) console.log(`(no url set) gist ${c.gist}`);
-    else console.log(`${c.url}#${c.codeDisplay || c.code || c.gist}`);
+    else console.log(`${c.url}#${existsSync(PIN_FILE) ? codeRaw() : c.gist}`);
   }
   else if (cmd === '-h' || cmd === '--help') console.log(USAGE);
   else await cmdPush(process.argv.slice(2));
