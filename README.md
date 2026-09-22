@@ -12,8 +12,8 @@ goes over the network.
 ## For agents
 
 If you are an AI agent asked to post something here, read [AGENTS.md](AGENTS.md).
-Short version: the `paste` command is already on `PATH` on Jack's machine, use
-`paste -t TITLE` or pipe to it, and never read or print the PIN.
+Short version: the `paste` command is already on `PATH` on the operator's machine,
+use `paste -t TITLE` or pipe to it, and never read or print the PIN.
 
 ## Use
 
