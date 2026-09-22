@@ -9,6 +9,12 @@ fixed gist. The static viewer page reads that gist and decrypts it in the
 browser. Plaintext never leaves the machine that ran `paste`, and the PIN never
 goes over the network.
 
+## For agents
+
+If you are an AI agent asked to post something here, read [AGENTS.md](AGENTS.md).
+Short version: the `paste` command is already on `PATH` on Jack's machine, use
+`paste -t TITLE` or pipe to it, and never read or print the PIN.
+
 ## Use
 
 ```sh
