@@ -40,7 +40,7 @@
   #gate p { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
   #pin {
     font: inherit; width: 100%; padding: 11px 13px; text-align: center;
-    letter-spacing: .3em; border-radius: var(--radius);
+    border-radius: var(--radius);
     border: 1px solid var(--line); background: var(--panel); color: var(--fg);
   }
   #pin:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
@@ -75,9 +75,10 @@
 
   <div id="gate">
     <h1>Paste Inbox</h1>
-    <p>Enter your PIN to decrypt.</p>
-    <input id="pin" type="password" inputmode="numeric" autocomplete="off"
-           placeholder="••••••" aria-label="PIN">
+    <p>Enter your passphrase to decrypt.</p>
+    <input id="pin" type="password" autocomplete="current-password"
+           autocapitalize="off" autocorrect="off" spellcheck="false"
+           placeholder="passphrase" aria-label="Passphrase">
     <button class="primary" id="unlock">Unlock</button>
     <label class="remember"><input type="checkbox" id="remember"> remember on this device</label>
     <div class="err" id="err"></div>
@@ -216,6 +217,7 @@ async function load() {
 async function unlock(pin, remember) {
   $("err").textContent = "";
   $("unlock").disabled = true;
+  $("unlock").textContent = "Deriving key…";
   try {
     const inbox = await fetchInbox();
     key = await deriveKey(pin, inbox.salt, inbox.kdf);
@@ -230,9 +232,10 @@ async function unlock(pin, remember) {
     await load();
   } catch (e) {
     key = null;
-    $("err").textContent = e instanceof DOMException ? "Wrong PIN." : e.message;
+    $("err").textContent = e instanceof DOMException ? "Wrong passphrase." : e.message;
   } finally {
     $("unlock").disabled = false;
+    $("unlock").textContent = "Unlock";
   }
 }
 

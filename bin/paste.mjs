@@ -10,7 +10,9 @@ import { homedir } from 'node:os';
 const CONF_DIR = process.env.PASTE_HOME || `${homedir()}/.paste`;
 const CONF = `${CONF_DIR}/config.json`;
 const PIN_FILE = `${CONF_DIR}/pin`;
-const KDF = { iter: 250000, hash: 'SHA-256' };
+// 2M iterations costs ~1s on a phone (once per device, then remembered) and
+// multiplies an offline attacker's cost by 8x over the original 250k.
+const KDF = { iter: 2000000, hash: 'SHA-256' };
 const KEEP = 30;
 const MAX_BYTES = 512 * 1024;
 
@@ -135,6 +137,7 @@ async function cmdRotate(newPin) {
   const c = conf();
   setPin(newPin);
   c.salt = b64(crypto.getRandomValues(new Uint8Array(16)));
+  c.kdf = KDF;   // otherwise config keeps the superseded iteration count
   saveConf(c);
   writeGist(c.gist, { v: 1, kdf: KDF, salt: c.salt, entries: [] });
   console.log('PIN rotated; inbox cleared (old entries are undecryptable)');
